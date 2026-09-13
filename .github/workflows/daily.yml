@@ -1,1 +1,90 @@
+name: Daily tax reports
 
+on:
+  workflow_dispatch:
+  schedule:
+    # 08:17 Asia/Seoul. GitHub may delay scheduled runs.
+    - cron: '17 23 * * *'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: maeil-tax-publish
+  cancel-in-progress: false
+
+jobs:
+  collect-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test the collector
+        run: python -m unittest discover -s . -p test_collector.py -v
+      - name: Restore durable data branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'maeil-tax-bot'
+          git config user.email 'maeil-tax-bot@users.noreply.github.com'
+          remote_ref="$(git ls-remote --heads origin refs/heads/report-data)"
+          if [ -n "$remote_ref" ]; then
+            git fetch origin report-data
+            git worktree add --detach runtime FETCH_HEAD
+          else
+            git worktree add --detach runtime HEAD
+            git -C runtime switch --orphan report-data
+          fi
+      - name: Collect with bounded retries
+        id: collect
+        shell: bash
+        run: |
+          set -uo pipefail
+          ok=false
+          for attempt in 1 2 3; do
+            if python collector.py --state runtime/state/maeil.sqlite3 --public runtime/public; then
+              ok=true
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then sleep 20; fi
+          done
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          if [ -f runtime/public/report.json ]; then
+            echo 'has_report=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'has_report=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Persist documents, revision history, and status
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C runtime add state/maeil.sqlite3 public
+          if ! git -C runtime diff --cached --quiet; then
+            git -C runtime commit -m 'Update tax reports and collection status'
+            git -C runtime push origin HEAD:refs/heads/report-data
+          fi
+      - name: Configure Pages
+        if: steps.collect.outputs.has_report == 'true'
+        uses: actions/configure-pages@v5
+      - name: Package the public feed only
+        if: steps.collect.outputs.has_report == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: runtime/public
+      - name: Publish report
+        id: deployment
+        if: steps.collect.outputs.has_report == 'true'
+        uses: actions/deploy-pages@v4
+      - name: Mark collection failures
+        if: steps.collect.outputs.ok != 'true'
+        run: |
+          echo 'Collection failed. Previous successful report was preserved; inspect status.json and logs.'
+          exit 1
