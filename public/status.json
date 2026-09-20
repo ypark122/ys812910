@@ -1,1 +1,1 @@
-{"attemptedAt":"2026-09-19T23:31:23.237292+00:00","message":"Source network request failed","ok":false,"previousReportPreserved":true}
+{"changed":3,"coveredFrom":"2026-09-12","coveredThrough":"2026-09-21","dateDiscrepancies":82,"lastSuccess":"2026-09-20T23:25:22.087776+00:00","listingCounts":{"decisions":48,"interpretations":4},"message":"수집 완료","ok":true,"olderRechecked":20,"total":123}
